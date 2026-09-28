@@ -300,7 +300,6 @@ pub async fn create_and_start_workspace(
         executor_config,
         prompt,
         attachment_ids,
-        workspace_overlay,
     } = payload;
 
     let mut workspace_prompt = normalize_prompt(&prompt).ok_or_else(|| {
@@ -374,12 +373,7 @@ pub async fn create_and_start_workspace(
 
     let execution_process = deployment
         .container()
-        .start_workspace(
-            &workspace,
-            executor_config.clone(),
-            workspace_prompt,
-            workspace_overlay,
-        )
+        .start_workspace(&workspace, executor_config.clone(), workspace_prompt)
         .await?;
 
     deployment

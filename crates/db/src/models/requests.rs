@@ -29,27 +29,6 @@ pub struct LinkedIssueInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-pub struct WorkspaceFileOverlay {
-    pub path: String,
-    pub content: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, TS)]
-pub struct WorkspaceManagedBlockOverlay {
-    pub path: String,
-    pub marker: String,
-    pub content: String,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize, TS)]
-pub struct WorkspaceOverlay {
-    #[serde(default)]
-    pub files: Vec<WorkspaceFileOverlay>,
-    #[serde(default)]
-    pub managed_blocks: Vec<WorkspaceManagedBlockOverlay>,
-}
-
-#[derive(Debug, Serialize, Deserialize, TS)]
 pub struct CreateAndStartWorkspaceRequest {
     pub workspace_id: Option<Uuid>,
     pub name: Option<String>,
@@ -58,7 +37,6 @@ pub struct CreateAndStartWorkspaceRequest {
     pub executor_config: ExecutorConfig,
     pub prompt: String,
     pub attachment_ids: Option<Vec<Uuid>>,
-    pub workspace_overlay: Option<WorkspaceOverlay>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

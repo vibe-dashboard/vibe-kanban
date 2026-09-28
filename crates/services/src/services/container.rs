@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -23,7 +23,6 @@ use db::{
         workspace_repo::WorkspaceRepo,
     },
 };
-use db::models::requests::WorkspaceOverlay;
 use executors::{
     actions::{
         ExecutorAction, ExecutorActionType,
@@ -56,114 +55,6 @@ use worktree_manager::WorktreeError;
 
 use crate::services::{execution_process, notification::NotificationService};
 pub type ContainerRef = String;
-
-const MANAGED_BLOCK_PREFIX: &str = "VK MANAGED BLOCK";
-
-fn safe_workspace_relative_path(path: &str) -> Result<PathBuf, ContainerError> {
-    let path = Path::new(path);
-    if path.as_os_str().is_empty() || path.is_absolute() {
-        return Err(ContainerError::Other(anyhow!(
-            "workspace overlay path must be a non-empty relative path"
-        )));
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => normalized.push(part),
-            Component::CurDir => {}
-            _ => {
-                return Err(ContainerError::Other(anyhow!(
-                    "workspace overlay path must not escape the workspace"
-                )));
-            }
-        }
-    }
-
-    if normalized.as_os_str().is_empty() {
-        return Err(ContainerError::Other(anyhow!(
-            "workspace overlay path must be a non-empty relative path"
-        )));
-    }
-
-    Ok(normalized)
-}
-
-fn upsert_managed_block(existing: &str, marker: &str, content: &str) -> String {
-    let begin = format!("<!-- BEGIN {MANAGED_BLOCK_PREFIX}: {marker} -->");
-    let end = format!("<!-- END {MANAGED_BLOCK_PREFIX}: {marker} -->");
-    let block = format!("{begin}\n{}\n{end}", content.trim_matches('\n'));
-
-    if let Some(begin_index) = existing.find(&begin)
-        && let Some(end_offset) = existing[begin_index..].find(&end)
-    {
-        let end_index = begin_index + end_offset + end.len();
-        let mut next = String::new();
-        next.push_str(existing[..begin_index].trim_end_matches('\n'));
-        if !next.is_empty() {
-            next.push_str("\n\n");
-        }
-        next.push_str(&block);
-        let rest = existing[end_index..].trim_start_matches('\n');
-        if !rest.is_empty() {
-            next.push_str("\n\n");
-            next.push_str(rest);
-        }
-        if !next.ends_with('\n') {
-            next.push('\n');
-        }
-        return next;
-    }
-
-    let mut next = existing.trim_end_matches('\n').to_string();
-    if !next.is_empty() {
-        next.push_str("\n\n");
-    }
-    next.push_str(&block);
-    next.push('\n');
-    next
-}
-
-async fn apply_workspace_overlay(
-    workspace_dir: &Path,
-    overlay: Option<WorkspaceOverlay>,
-) -> Result<(), ContainerError> {
-    let Some(overlay) = overlay else {
-        return Ok(());
-    };
-
-    for file in overlay.files {
-        let relative = safe_workspace_relative_path(&file.path)?;
-        let destination = workspace_dir.join(relative);
-        if let Some(parent) = destination.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(destination, file.content).await?;
-    }
-
-    for block in overlay.managed_blocks {
-        if block.marker.trim().is_empty()
-            || block.marker.contains('\n')
-            || block.marker.contains("-->")
-        {
-            return Err(ContainerError::Other(anyhow!(
-                "workspace overlay managed block marker is invalid"
-            )));
-        }
-        let relative = safe_workspace_relative_path(&block.path)?;
-        let destination = workspace_dir.join(relative);
-        if let Some(parent) = destination.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        let existing = tokio::fs::read_to_string(&destination)
-            .await
-            .unwrap_or_default();
-        let next = upsert_managed_block(&existing, &block.marker, &block.content);
-        tokio::fs::write(destination, next).await?;
-    }
-
-    Ok(())
-}
 
 #[derive(Debug, Error)]
 pub enum ContainerError {
@@ -1262,11 +1153,9 @@ pub trait ContainerService {
         workspace: &Workspace,
         executor_config: ExecutorConfig,
         prompt: String,
-        workspace_overlay: Option<WorkspaceOverlay>,
     ) -> Result<ExecutionProcess, ContainerError> {
         // Create container
-        let workspace_dir = self.create(workspace).await?;
-        apply_workspace_overlay(Path::new(&workspace_dir), workspace_overlay).await?;
+        self.create(workspace).await?;
 
         let repos = WorkspaceRepo::find_repos_for_workspace(&self.db().pool, workspace.id).await?;
 
@@ -2081,31 +1970,5 @@ mod tests {
         assert!(!session_b_process.dropped);
 
         Ok(())
-    }
-
-    #[test]
-    fn workspace_overlay_managed_block_preserves_human_content() {
-        let existing = "@repo/AGENTS.md\n\nHuman note.\n";
-        let next = upsert_managed_block(existing, "workspace-instructions", "Generated note.");
-
-        assert!(next.contains("@repo/AGENTS.md"));
-        assert!(next.contains("Human note."));
-        assert!(next.contains("<!-- BEGIN VK MANAGED BLOCK: workspace-instructions -->"));
-        assert!(next.contains("Generated note."));
-
-        let updated = upsert_managed_block(&next, "workspace-instructions", "Updated note.");
-        assert!(updated.contains("@repo/AGENTS.md"));
-        assert!(updated.contains("Human note."));
-        assert!(updated.contains("Updated note."));
-        assert!(!updated.contains("Generated note."));
-    }
-
-    #[test]
-    fn workspace_overlay_rejects_paths_outside_workspace() {
-        assert!(safe_workspace_relative_path("AGENTS.md").is_ok());
-        assert!(safe_workspace_relative_path(".config/file").is_ok());
-        assert!(safe_workspace_relative_path("../AGENTS.md").is_err());
-        assert!(safe_workspace_relative_path("/tmp/AGENTS.md").is_err());
-        assert!(safe_workspace_relative_path("").is_err());
     }
 }
